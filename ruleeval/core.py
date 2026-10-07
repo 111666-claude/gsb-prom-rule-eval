@@ -21,19 +21,33 @@ def _compare(value, op, threshold):
 class Evaluator:
     def __init__(self, rules):
         self.rules = rules
-        self.history = []
+        self._states = {}
 
     def observe(self, samples, ts, counter):
-        self.history.extend(samples)
         out = []
         for rule in self.rules:
             counter.scanned += 1
-            matched = False
-            for sample in self.history:
+            seen = set()
+            for sample in samples:
                 counter.scanned += 1
-                if sample["metric"] == rule["metric"] and _compare(
-                        sample["value"], rule["op"], rule["threshold"]):
-                    matched = True
-            if matched:
-                out.append({"rule": rule["name"], "labels": {}})
+                if sample["metric"] != rule["metric"]:
+                    continue
+                labels = sample.get("labels", {})
+                key = (rule["name"], tuple(sorted(labels.items())))
+                if key in seen:
+                    continue
+                seen.add(key)
+                state = self._states.setdefault(key, [0, False])
+                if _compare(sample["value"], rule["op"], rule["threshold"]):
+                    state[0] += 1
+                    if state[0] > rule["for"] and not state[1]:
+                        state[1] = True
+                        out.append({"rule": rule["name"], "labels": dict(labels)})
+                else:
+                    state[0] = 0
+                    state[1] = False
+            for key, state in self._states.items():
+                if key[0] == rule["name"] and key not in seen:
+                    state[0] = 0
+                    state[1] = False
         return out
